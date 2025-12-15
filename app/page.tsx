@@ -90,6 +90,7 @@ export default function HomePage() {
               },
               body: JSON.stringify({
                 code: response.code,
+                email: response.email,
               }),
             });
 
