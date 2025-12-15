@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import React, { useState } from 'react';
-import Swal from 'sweetalert2';
+import React, { useState } from "react";
+import Swal from "sweetalert2";
 
 declare global {
   interface Window {
@@ -9,8 +9,9 @@ declare global {
   }
 }
 
-const GMAIL_SCOPES = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile';
-const N8N_WEBHOOK_URL = 'https://techtizz.app.n8n.cloud/webhook/user-email';
+const GMAIL_SCOPES =
+  "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
+const N8N_WEBHOOK_URL = "https://techtizz.app.n8n.cloud/webhook/user-email";
 
 export default function HomePage() {
   const [isProcessing, setIsProcessing] = useState(false);
@@ -18,17 +19,16 @@ export default function HomePage() {
 
   // Load Google Identity Services
   React.useEffect(() => {
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
     script.async = true;
     script.defer = true;
     script.onload = () => {
       // Initialize Google Identity Services
-      if (window.google)
-      {
+      if (window.google) {
         // This ensures account selection is available
         window.google.accounts.id.initialize({
-          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '',
+          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "",
           auto_select: false, // Don't auto-select, show account picker
         });
       }
@@ -37,8 +37,7 @@ export default function HomePage() {
     document.body.appendChild(script);
 
     return () => {
-      if (document.body.contains(script))
-      {
+      if (document.body.contains(script)) {
         document.body.removeChild(script);
       }
     };
@@ -46,20 +45,17 @@ export default function HomePage() {
 
   // Initiate Gmail OAuth flow
   const initiateGmailOAuth = async () => {
-    try
-    {
-      if (!window.google)
-      {
-        throw new Error('Google Identity Services not loaded');
+    try {
+      if (!window.google) {
+        throw new Error("Google Identity Services not loaded");
       }
 
       setIsProcessing(true);
 
-      // Show processing alert
       Swal.fire({
-        title: 'Processing...',
-        text: 'Your email data is being extracted… Please wait.',
-        icon: 'info',
+        title: "Connecting Gmail...",
+        text: "Please select your Google account",
+        icon: "info",
         allowOutsideClick: false,
         allowEscapeKey: false,
         showConfirmButton: false,
@@ -68,207 +64,123 @@ export default function HomePage() {
         },
       });
 
-      // Get Google Client ID from environment
-      const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
+      const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 
-      if (!clientId)
-      {
-        Swal.fire({
-          title: 'Configuration Required',
-          html: `
-            <div style="text-align: left;">
-              <p style="margin-bottom: 15px;"><strong>Google Client ID is not configured.</strong></p>
-              <p style="margin-bottom: 10px;">Please follow these steps:</p>
-              <ol style="margin: 10px 0; padding-left: 20px; line-height: 1.8;">
-                <li>Create a <code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">.env.local</code> file in your project root</li>
-                <li>Add: <code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">NEXT_PUBLIC_GOOGLE_CLIENT_ID=your-client-id</code></li>
-                <li>Get your Client ID from <a href="https://console.cloud.google.com/" target="_blank" style="color: #4285F4;">Google Cloud Console</a></li>
-                <li>Restart your development server (npm run dev)</li>
-              </ol>
-              <p style="margin-top: 15px; font-size: 12px; color: #666;">
-                See README.md for detailed setup instructions.
-              </p>
-            </div>
-          `,
-          icon: 'warning',
-          confirmButtonText: 'Got it!',
-          width: '600px',
-        });
-        setIsProcessing(false);
-        return;
+      if (!clientId) {
+        throw new Error("Google Client ID missing");
       }
 
-      // Use Google Identity Services for OAuth 2.0 with account selection
-      const tokenClient = window.google.accounts.oauth2.initTokenClient({
+      // ✅ AUTHORIZATION CODE FLOW (CORRECT)
+      const codeClient = window.google.accounts.oauth2.initCodeClient({
         client_id: clientId,
         scope: GMAIL_SCOPES,
-        callback: async (tokenResponse: any) => {
-          try
-          {
-            if (tokenResponse.error)
-            {
-              Swal.fire({
-                title: 'Error!',
-                text: tokenResponse.error_description || 'Failed to get access token',
-                icon: 'error',
-                confirmButtonText: 'OK',
-              });
-              setIsProcessing(false);
-              return;
+        access_type: "offline", // IMPORTANT
+        prompt: "consent", // IMPORTANT
+        callback: async (response: any) => {
+          try {
+            if (!response.code) {
+              throw new Error("Authorization code not received");
             }
 
-            // We have the access token
-            const accessToken = tokenResponse.access_token;
+            // ✅ Send AUTH CODE to n8n (NOT tokens)
+            const res = await fetch(N8N_WEBHOOK_URL, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                code: response.code,
+              }),
+            });
 
-            // Get user email from Google API
-            let userEmail = '';
-            try
-            {
-              const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-                headers: {
-                  'Authorization': `Bearer ${accessToken}`,
-                },
-              });
-
-              if (userInfoResponse.ok)
-              {
-                const userInfo = await userInfoResponse.json();
-                userEmail = userInfo.email || '';
-
-                // Also log user info for debugging
-                console.log('User info:', userInfo);
-              } else
-              {
-                const errorData = await userInfoResponse.json().catch(() => ({}));
-                console.error('Failed to fetch user info:', userInfoResponse.status, userInfoResponse.statusText, errorData);
-
-                // Show detailed error
-                Swal.fire({
-                  title: 'Authentication Error',
-                  html: `
-                    <div style="text-align: left;">
-                      <p><strong>Status:</strong> ${userInfoResponse.status} ${userInfoResponse.statusText}</p>
-                      <p><strong>Error:</strong> ${errorData.error?.message || 'Failed to get user email'}</p>
-                      <p style="margin-top: 10px; font-size: 12px; color: #666;">
-                        Make sure you've granted all required permissions.
-                      </p>
-                    </div>
-                  `,
-                  icon: 'error',
-                  confirmButtonText: 'OK',
-                });
-                setIsProcessing(false);
-                return;
-              }
-            } catch (err: any)
-            {
-              console.error('Could not fetch user info:', err);
-              Swal.fire({
-                title: 'Error!',
-                text: err.message || 'Failed to get user email. Please try again.',
-                icon: 'error',
-                confirmButtonText: 'OK',
-              });
-              setIsProcessing(false);
-              return;
+            if (!res.ok) {
+              throw new Error("Failed to send auth code to server");
             }
 
-            if (!userEmail)
-            {
-              Swal.fire({
-                title: 'Error!',
-                text: 'Could not retrieve email address. Please try again.',
-                icon: 'error',
-                confirmButtonText: 'OK',
-              });
-              setIsProcessing(false);
-              return;
-            }
-
-            // Send to n8n (refresh_token might not be available in client-side flow)
-            await sendToN8N(userEmail, accessToken, tokenResponse.refresh_token || '');
-          } catch (error)
-          {
-            console.error('Token callback error:', error);
             Swal.fire({
-              title: 'Error!',
-              text: 'Failed to process authentication. Please try again.',
-              icon: 'error',
-              confirmButtonText: 'OK',
+              title: "Connected Successfully 🎉",
+              text: "Your Gmail is now connected. You will not need to login again.",
+              icon: "success",
+              confirmButtonText: "OK",
+            });
+
+            setIsProcessing(false);
+          } catch (err: any) {
+            console.error(err);
+            Swal.fire({
+              title: "Error",
+              text: err.message || "Failed to connect Gmail",
+              icon: "error",
             });
             setIsProcessing(false);
           }
         },
       });
 
-      // Request access token (this will trigger the OAuth popup)
-      // Account selection will appear automatically if user has multiple Google accounts logged in
-      tokenClient.requestAccessToken();
-    } catch (error: any)
-    {
-      console.error('OAuth error:', error);
+      // 🚀 Start OAuth
+      codeClient.requestCode();
+    } catch (error: any) {
+      console.error(error);
       Swal.fire({
-        title: 'Error!',
-        text: error.message || 'Failed to initiate Gmail OAuth. Please check your Google Client ID.',
-        icon: 'error',
-        confirmButtonText: 'OK',
+        title: "Error",
+        text: error.message || "OAuth failed",
+        icon: "error",
       });
       setIsProcessing(false);
     }
   };
 
   // Send data to n8n webhook
-  const sendToN8N = async (userEmail: string, accessToken: string, refreshToken: string) => {
-    try
-    {
-      const response = await fetch(N8N_WEBHOOK_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: userEmail,
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        }),
-      });
+  // const sendToN8N = async (userEmail: string, accessToken: string, refreshToken: string) => {
+  //   try
+  //   {
+  //     const response = await fetch(N8N_WEBHOOK_URL, {
+  //       method: 'POST',
+  //       headers: {
+  //         'Content-Type': 'application/json',
+  //       },
+  //       body: JSON.stringify({
+  //         email: userEmail,
+  //         access_token: accessToken,
+  //         refresh_token: refreshToken,
+  //       }),
+  //     });
 
-      if (!response.ok)
-      {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+  //     if (!response.ok)
+  //     {
+  //       throw new Error(`HTTP error! status: ${response.status}`);
+  //     }
 
-      // Show success alert
-      Swal.fire({
-        title: 'Success!',
-        text: 'Your email data has been successfully sent for processing.',
-        icon: 'success',
-        confirmButtonText: 'OK',
-      });
+  //     // Show success alert
+  //     Swal.fire({
+  //       title: 'Success!',
+  //       text: 'Your email data has been successfully sent for processing.',
+  //       icon: 'success',
+  //       confirmButtonText: 'OK',
+  //     });
 
-      setIsProcessing(false);
-    } catch (error)
-    {
-      console.error('N8N webhook error:', error);
-      Swal.fire({
-        title: 'Error!',
-        text: 'Failed to send data to server. Please try again.',
-        icon: 'error',
-        confirmButtonText: 'OK',
-      });
-      setIsProcessing(false);
-    }
-  };
+  //     setIsProcessing(false);
+  //   } catch (error)
+  //   {
+  //     console.error('N8N webhook error:', error);
+  //     Swal.fire({
+  //       title: 'Error!',
+  //       text: 'Failed to send data to server. Please try again.',
+  //       icon: 'error',
+  //       confirmButtonText: 'OK',
+  //     });
+  //     setIsProcessing(false);
+  //   }
+  // };
 
   // Handle Connect Gmail button click
   const handleConnectGmail = async () => {
-    if (!isGoogleLoaded)
-    {
+    if (!isGoogleLoaded) {
       Swal.fire({
-        title: 'Loading...',
-        text: 'Google services are still loading. Please wait a moment.',
-        icon: 'info',
-        confirmButtonText: 'OK',
+        title: "Loading...",
+        text: "Google services are still loading. Please wait a moment.",
+        icon: "info",
+        confirmButtonText: "OK",
       });
       return;
     }
@@ -284,8 +196,14 @@ export default function HomePage() {
         {/* Animated Background Pattern */}
         <div className="absolute inset-0 opacity-20">
           <div className="absolute top-0 left-0 w-96 h-96 bg-blue-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float"></div>
-          <div className="absolute top-0 right-0 w-96 h-96 bg-purple-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float" style={{ animationDelay: '2s' }}></div>
-          <div className="absolute bottom-0 left-1/2 w-96 h-96 bg-pink-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float" style={{ animationDelay: '4s' }}></div>
+          <div
+            className="absolute top-0 right-0 w-96 h-96 bg-purple-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float"
+            style={{ animationDelay: "2s" }}
+          ></div>
+          <div
+            className="absolute bottom-0 left-1/2 w-96 h-96 bg-pink-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float"
+            style={{ animationDelay: "4s" }}
+          ></div>
         </div>
 
         {/* Grid Pattern Overlay */}
@@ -367,10 +285,22 @@ export default function HomePage() {
                       viewBox="0 0 24 24"
                       fill="currentColor"
                     >
-                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#fff" />
-                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#fff" />
-                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#fff" />
-                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#fff" />
+                      <path
+                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                        fill="#fff"
+                      />
+                      <path
+                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                        fill="#fff"
+                      />
+                      <path
+                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                        fill="#fff"
+                      />
+                      <path
+                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                        fill="#fff"
+                      />
                     </svg>
                     <span className="relative z-10">Continue to Gmail</span>
                   </>
@@ -429,16 +359,28 @@ export default function HomePage() {
           {/* Additional Info Cards */}
           <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-lg rounded-xl p-4 border border-white/20 text-center">
-              <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">🔒</div>
-              <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-2">Secure</div>
+              <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
+                🔒
+              </div>
+              <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-2">
+                Secure
+              </div>
             </div>
             <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-lg rounded-xl p-4 border border-white/20 text-center">
-              <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">⚡</div>
-              <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-2">Fast</div>
+              <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                ⚡
+              </div>
+              <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-2">
+                Fast
+              </div>
             </div>
             <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-lg rounded-xl p-4 border border-white/20 text-center">
-              <div className="text-2xl font-bold text-pink-600 dark:text-pink-400">✨</div>
-              <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-2">Easy</div>
+              <div className="text-2xl font-bold text-pink-600 dark:text-pink-400">
+                ✨
+              </div>
+              <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-2">
+                Easy
+              </div>
             </div>
           </div>
         </div>
