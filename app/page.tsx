@@ -115,6 +115,7 @@ export default function HomePage() {
             setIsProcessing(false);
           }
         },
+        redirect_uri: "https://techtizz.app.n8n.cloud/webhook/user-email",
       });
 
       // 🚀 Start OAuth
