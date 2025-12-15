@@ -130,13 +130,17 @@ export default function HomePage() {
           tokenClient?.requestAccessToken({ prompt: "" });
         });
 
+      const redirectUri =
+        process.env.NEXT_PUBLIC_GOOGLE_REDIRECT_URI || window.location.origin;
+
       // ✅ AUTHORIZATION CODE FLOW (CORRECT)
       const codeClient = window.google.accounts.oauth2.initCodeClient({
         client_id: clientId,
         scope: GMAIL_SCOPES,
         access_type: "offline", // get refresh token server-side
         prompt: "consent", // ensure consent and account selection
-        redirect_uri: "https://extract-email-data.vercel.app",
+        redirect_uri: redirectUri,
+        ux_mode: "popup", // use popup to avoid full-page redirects
         callback: async (response: any) => {
           try
           {
