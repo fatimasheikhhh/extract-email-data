@@ -88,7 +88,9 @@ export default function HomePage() {
                 {
                   reject(
                     new Error(
-                      tokenResponse.error_description || "Failed to get access token"
+                      tokenResponse.error_description ||
+                      tokenResponse.error ||
+                      "Failed to get access token"
                     )
                   );
                   return;
@@ -124,10 +126,27 @@ export default function HomePage() {
                 reject(err);
               }
             },
+            error_callback: (err: any) => {
+              reject(
+                new Error(
+                  err?.error_description || err?.error || "Token request failed"
+                )
+              );
+            },
           });
 
           // Try to use existing session; prompt: '' avoids extra popup if possible
-          tokenClient?.requestAccessToken({ prompt: "" });
+          try
+          {
+            tokenClient?.requestAccessToken({ prompt: "" });
+          } catch (err: any)
+          {
+            reject(
+              new Error(
+                err?.message || "Token request blocked. Please allow popups."
+              )
+            );
+          }
         });
 
       const redirectUri =
