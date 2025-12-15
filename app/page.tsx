@@ -25,7 +25,8 @@ export default function HomePage() {
     script.defer = true;
     script.onload = () => {
       // Initialize Google Identity Services
-      if (window.google) {
+      if (window.google)
+      {
         // This ensures account selection is available
         window.google.accounts.id.initialize({
           client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "",
@@ -37,7 +38,8 @@ export default function HomePage() {
     document.body.appendChild(script);
 
     return () => {
-      if (document.body.contains(script)) {
+      if (document.body.contains(script))
+      {
         document.body.removeChild(script);
       }
     };
@@ -45,8 +47,10 @@ export default function HomePage() {
 
   // Initiate Gmail OAuth flow
   const initiateGmailOAuth = async () => {
-    try {
-      if (!window.google) {
+    try
+    {
+      if (!window.google)
+      {
         throw new Error("Google Identity Services not loaded");
       }
 
@@ -66,23 +70,92 @@ export default function HomePage() {
 
       const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 
-      if (!clientId) {
+      if (!clientId)
+      {
         throw new Error("Google Client ID missing");
       }
+
+      // Helper: silently fetch user email using token flow (no extra popup if already authorized)
+      const fetchEmailSilently = (): Promise<string> =>
+        new Promise((resolve, reject) => {
+          const tokenClient = window.google?.accounts.oauth2.initTokenClient({
+            client_id: clientId,
+            scope: GMAIL_SCOPES,
+            callback: async (tokenResponse: any) => {
+              try
+              {
+                if (tokenResponse.error)
+                {
+                  reject(
+                    new Error(
+                      tokenResponse.error_description || "Failed to get access token"
+                    )
+                  );
+                  return;
+                }
+
+                const userInfoResponse = await fetch(
+                  "https://www.googleapis.com/oauth2/v2/userinfo",
+                  {
+                    headers: {
+                      Authorization: `Bearer ${tokenResponse.access_token}`,
+                    },
+                  }
+                );
+
+                if (!userInfoResponse.ok)
+                {
+                  const errorData = await userInfoResponse
+                    .json()
+                    .catch(() => ({}));
+                  reject(
+                    new Error(
+                      errorData.error?.message ||
+                      `Failed to fetch user info (${userInfoResponse.status})`
+                    )
+                  );
+                  return;
+                }
+
+                const userInfo = await userInfoResponse.json();
+                resolve(userInfo.email || "");
+              } catch (err: any)
+              {
+                reject(err);
+              }
+            },
+          });
+
+          // Try to use existing session; prompt: '' avoids extra popup if possible
+          tokenClient?.requestAccessToken({ prompt: "" });
+        });
 
       // ✅ AUTHORIZATION CODE FLOW (CORRECT)
       const codeClient = window.google.accounts.oauth2.initCodeClient({
         client_id: clientId,
         scope: GMAIL_SCOPES,
-        access_type: "offline", // IMPORTANT
-        prompt: "consent", // IMPORTANT
+        access_type: "offline", // get refresh token server-side
+        prompt: "consent", // ensure consent and account selection
+        redirect_uri: "https://extract-email-data.vercel.app",
         callback: async (response: any) => {
-          try {
-            if (!response.code) {
+          try
+          {
+            if (!response.code)
+            {
               throw new Error("Authorization code not received");
             }
 
-            // ✅ Send AUTH CODE to n8n (NOT tokens)
+            // Try to fetch email silently using the same session
+            let userEmail = "";
+            try
+            {
+              userEmail = await fetchEmailSilently();
+            } catch (err)
+            {
+              console.warn("Could not fetch email silently:", err);
+            }
+
+            // ✅ Send AUTH CODE + email (if available) to n8n
             const res = await fetch(N8N_WEBHOOK_URL, {
               method: "POST",
               headers: {
@@ -90,23 +163,30 @@ export default function HomePage() {
               },
               body: JSON.stringify({
                 code: response.code,
-                email: response.email,
+                email: userEmail || undefined,
               }),
             });
 
-            if (!res.ok) {
-              throw new Error("Failed to send auth code to server");
+            if (!res.ok)
+            {
+              const errText = await res.text().catch(() => "");
+              throw new Error(
+                `Failed to send auth code to server. Status: ${res.status} ${res.statusText} ${errText}`
+              );
             }
 
             Swal.fire({
               title: "Connected Successfully 🎉",
-              text: "Your Gmail is now connected. You will not need to login again.",
+              text: userEmail
+                ? `Connected as ${userEmail}. You won't need to login again.`
+                : "Your Gmail is now connected. You won't need to login again.",
               icon: "success",
               confirmButtonText: "OK",
             });
 
             setIsProcessing(false);
-          } catch (err: any) {
+          } catch (err: any)
+          {
             console.error(err);
             Swal.fire({
               title: "Error",
@@ -116,12 +196,12 @@ export default function HomePage() {
             setIsProcessing(false);
           }
         },
-        redirect_uri: "https://extract-email-data.vercel.app",
       });
 
       // 🚀 Start OAuth
       codeClient.requestCode();
-    } catch (error: any) {
+    } catch (error: any)
+    {
       console.error(error);
       Swal.fire({
         title: "Error",
@@ -177,7 +257,8 @@ export default function HomePage() {
 
   // Handle Connect Gmail button click
   const handleConnectGmail = async () => {
-    if (!isGoogleLoaded) {
+    if (!isGoogleLoaded)
+    {
       Swal.fire({
         title: "Loading...",
         text: "Google services are still loading. Please wait a moment.",
