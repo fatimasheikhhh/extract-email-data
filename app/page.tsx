@@ -168,26 +168,85 @@ export default function HomePage() {
               throw new Error("Authorization code not received");
             }
 
-            // Try to fetch email silently using the same session
+            // Fetch email using token client (will use same session from code flow)
             let userEmail = "";
             try
             {
-              userEmail = await fetchEmailSilently();
+              // Use Promise to properly wait for email fetch
+              userEmail = await new Promise<string>((resolve, reject) => {
+                const tokenClient = window.google?.accounts.oauth2.initTokenClient({
+                  client_id: clientId,
+                  scope: GMAIL_SCOPES,
+                  callback: async (tokenResponse: any) => {
+                    try
+                    {
+                      if (tokenResponse.error)
+                      {
+                        reject(new Error(tokenResponse.error_description || "Failed to get token"));
+                        return;
+                      }
+
+                      const userInfoResponse = await fetch(
+                        "https://www.googleapis.com/oauth2/v2/userinfo",
+                        {
+                          headers: {
+                            Authorization: `Bearer ${tokenResponse.access_token}`,
+                          },
+                        }
+                      );
+
+                      if (userInfoResponse.ok)
+                      {
+                        const userInfo = await userInfoResponse.json();
+                        const email = userInfo.email || "";
+                        console.log("✅ Email fetched:", email);
+                        resolve(email);
+                      } else
+                      {
+                        const errorData = await userInfoResponse.json().catch(() => ({}));
+                        reject(new Error(errorData.error?.message || "Failed to fetch user info"));
+                      }
+                    } catch (err: any)
+                    {
+                      reject(err);
+                    }
+                  },
+                });
+
+                // Request token (will use existing session from code flow)
+                try
+                {
+                  tokenClient?.requestAccessToken({ prompt: "" });
+                } catch (err: any)
+                {
+                  reject(new Error(err?.message || "Token request failed"));
+                }
+              });
             } catch (err)
             {
-              console.warn("Could not fetch email silently:", err);
+              console.warn("⚠️ Could not fetch email:", err);
+              // Continue without email - code will still be sent
             }
 
-            // ✅ Send AUTH CODE + email (if available) to n8n
+            // ✅ Send AUTH CODE + email to n8n
+            const payload: any = {
+              code: response.code,
+            };
+
+            // Only add email if we got it
+            if (userEmail)
+            {
+              payload.email = userEmail;
+            }
+
+            console.log("Sending to n8n:", payload);
+
             const res = await fetch(N8N_WEBHOOK_URL, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
               },
-              body: JSON.stringify({
-                code: response.code,
-                email: userEmail || undefined,
-              }),
+              body: JSON.stringify(payload),
             });
 
             if (!res.ok)
