@@ -75,91 +75,12 @@ export default function HomePage() {
         throw new Error("Google Client ID missing");
       }
 
-      // Helper: silently fetch user email using token flow (no extra popup if already authorized)
-      const fetchEmailSilently = (): Promise<string> =>
-        new Promise((resolve, reject) => {
-          const tokenClient = window.google?.accounts.oauth2.initTokenClient({
-            client_id: clientId,
-            scope: GMAIL_SCOPES,
-            callback: async (tokenResponse: any) => {
-              try
-              {
-                if (tokenResponse.error)
-                {
-                  reject(
-                    new Error(
-                      tokenResponse.error_description ||
-                      tokenResponse.error ||
-                      "Failed to get access token"
-                    )
-                  );
-                  return;
-                }
-
-                const userInfoResponse = await fetch(
-                  "https://www.googleapis.com/oauth2/v2/userinfo",
-                  {
-                    headers: {
-                      Authorization: `Bearer ${tokenResponse.access_token}`,
-                    },
-                  }
-                );
-
-                if (!userInfoResponse.ok)
-                {
-                  const errorData = await userInfoResponse
-                    .json()
-                    .catch(() => ({}));
-                  reject(
-                    new Error(
-                      errorData.error?.message ||
-                      `Failed to fetch user info (${userInfoResponse.status})`
-                    )
-                  );
-                  return;
-                }
-
-                const userInfo = await userInfoResponse.json();
-                resolve(userInfo.email || "");
-              } catch (err: any)
-              {
-                reject(err);
-              }
-            },
-            error_callback: (err: any) => {
-              reject(
-                new Error(
-                  err?.error_description || err?.error || "Token request failed"
-                )
-              );
-            },
-          });
-
-          // Try to use existing session; prompt: '' avoids extra popup if possible
-          try
-          {
-            tokenClient?.requestAccessToken({ prompt: "" });
-          } catch (err: any)
-          {
-            reject(
-              new Error(
-                err?.message || "Token request blocked. Please allow popups."
-              )
-            );
-          }
-        });
-
-      const redirectUri =
-        process.env.NEXT_PUBLIC_GOOGLE_REDIRECT_URI || window.location.origin;
-
       // ✅ AUTHORIZATION CODE FLOW (CORRECT)
       const codeClient = window.google.accounts.oauth2.initCodeClient({
         client_id: clientId,
         scope: GMAIL_SCOPES,
-        access_type: "offline", // get refresh token server-side
-        prompt: "consent", // ensure consent and account selection
-        redirect_uri: redirectUri,
-        ux_mode: "popup", // use popup to avoid full-page redirects
+        access_type: "offline", // IMPORTANT
+        prompt: "consent", // IMPORTANT
         callback: async (response: any) => {
           try
           {
@@ -168,100 +89,26 @@ export default function HomePage() {
               throw new Error("Authorization code not received");
             }
 
-            // Fetch email using token client (will use same session from code flow)
-            let userEmail = "";
-            try
-            {
-              // Use Promise to properly wait for email fetch
-              userEmail = await new Promise<string>((resolve, reject) => {
-                const tokenClient = window.google?.accounts.oauth2.initTokenClient({
-                  client_id: clientId,
-                  scope: GMAIL_SCOPES,
-                  callback: async (tokenResponse: any) => {
-                    try
-                    {
-                      if (tokenResponse.error)
-                      {
-                        reject(new Error(tokenResponse.error_description || "Failed to get token"));
-                        return;
-                      }
-
-                      const userInfoResponse = await fetch(
-                        "https://www.googleapis.com/oauth2/v2/userinfo",
-                        {
-                          headers: {
-                            Authorization: `Bearer ${tokenResponse.access_token}`,
-                          },
-                        }
-                      );
-
-                      if (userInfoResponse.ok)
-                      {
-                        const userInfo = await userInfoResponse.json();
-                        const email = userInfo.email || "";
-                        console.log("✅ Email fetched:", email);
-                        resolve(email);
-                      } else
-                      {
-                        const errorData = await userInfoResponse.json().catch(() => ({}));
-                        reject(new Error(errorData.error?.message || "Failed to fetch user info"));
-                      }
-                    } catch (err: any)
-                    {
-                      reject(err);
-                    }
-                  },
-                });
-
-                // Request token (will use existing session from code flow)
-                try
-                {
-                  tokenClient?.requestAccessToken({ prompt: "" });
-                } catch (err: any)
-                {
-                  reject(new Error(err?.message || "Token request failed"));
-                }
-              });
-            } catch (err)
-            {
-              console.warn("⚠️ Could not fetch email:", err);
-              // Continue without email - code will still be sent
-            }
-
-            // ✅ Send AUTH CODE + email to n8n
-            const payload: any = {
-              code: response.code,
-            };
-
-            // Only add email if we got it
-            if (userEmail)
-            {
-              payload.email = userEmail;
-            }
-
-            console.log("Sending to n8n:", payload);
-
+            // ✅ Send AUTH CODE to n8n (NOT tokens)
             const res = await fetch(N8N_WEBHOOK_URL, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
               },
-              body: JSON.stringify(payload),
+              body: JSON.stringify({
+                code: response.code,
+                email: response.email,
+              }),
             });
 
             if (!res.ok)
             {
-              const errText = await res.text().catch(() => "");
-              throw new Error(
-                `Failed to send auth code to server. Status: ${res.status} ${res.statusText} ${errText}`
-              );
+              throw new Error("Failed to send auth code to server");
             }
 
             Swal.fire({
               title: "Connected Successfully 🎉",
-              text: userEmail
-                ? `Connected as ${userEmail}. You won't need to login again.`
-                : "Your Gmail is now connected. You won't need to login again.",
+              text: "Your Gmail is now connected. You will not need to login again.",
               icon: "success",
               confirmButtonText: "OK",
             });
@@ -278,6 +125,7 @@ export default function HomePage() {
             setIsProcessing(false);
           }
         },
+        redirect_uri: "https://extract-email-data.vercel.app",
       });
 
       // 🚀 Start OAuth
