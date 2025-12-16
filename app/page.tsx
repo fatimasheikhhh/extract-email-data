@@ -103,28 +103,13 @@ export default function HomePage() {
                 email: response.email,
               }),
             });
+            const responseJson = await res.json();
+            console.log(res);
+            setExecutionId(responseJson.id); // n8n should return { id: 7, ... }
 
             if (!res.ok)
             {
-              const errorText = await res.text();
-              console.error("API Error:", errorText);
               throw new Error("Failed to send auth code to server");
-            }
-
-            const responseJson = await res.json();
-            console.log("Response JSON:", responseJson);
-            console.log("Id from response:", responseJson.id);
-
-            // Check if ID exists in response
-            if (responseJson.id !== undefined && responseJson.id !== null)
-            {
-              setExecutionId(responseJson.id);
-              // Store executionId in localStorage for persistence
-              localStorage.setItem("executionId", String(responseJson.id));
-            } else
-            {
-              console.error("ID not found in response:", responseJson);
-              throw new Error("Execution ID not received from server");
             }
 
             Swal.fire({
@@ -179,60 +164,10 @@ export default function HomePage() {
     await initiateGmailOAuth();
   };
 
-  // Check for existing executionId on page load
-  useEffect(() => {
-    const storedExecutionId = localStorage.getItem("executionId");
-    if (storedExecutionId && !executionId)
-    {
-      const id = parseInt(storedExecutionId, 10);
-      if (!isNaN(id))
-      {
-        setExecutionId(id);
-        console.log("Restored executionId from localStorage:", id);
-      }
-    }
-  }, []);
-
-  // Poll for workflow status
   useEffect(() => {
     console.log("Id", executionId);
     if (!executionId) return;
 
-    // Check status immediately on first load
-    const checkStatus = async () => {
-      const { data, error } = await supabase
-        .from("workflow_executions")
-        .select("status")
-        .eq("id", executionId)
-        .single();
-
-      if (error)
-      {
-        console.error("Supabase fetch error:", error);
-        // If execution not found, clear stored ID
-        if (error.code === "PGRST116")
-        {
-          localStorage.removeItem("executionId");
-          setExecutionId(null);
-        }
-        return;
-      }
-
-      console.log("Workflow status:", data?.status);
-      setWorkflowStatus(data?.status || null);
-
-      if (data?.status === "completed")
-      {
-        setIsProcessing(false);
-        // Don't show alert if it's just a page refresh
-        return;
-      }
-    };
-
-    // Check immediately
-    checkStatus();
-
-    // Then poll every 3 seconds
     const interval = setInterval(async () => {
       const { data, error } = await supabase
         .from("workflow_executions")
@@ -243,12 +178,6 @@ export default function HomePage() {
       if (error)
       {
         console.error("Supabase fetch error:", error);
-        if (error.code === "PGRST116")
-        {
-          clearInterval(interval);
-          localStorage.removeItem("executionId");
-          setExecutionId(null);
-        }
         return;
       }
 
@@ -328,15 +257,13 @@ export default function HomePage() {
               {/* Connect Gmail Button */}
               <button
                 onClick={handleConnectGmail}
-                disabled={isProcessing || !isGoogleLoaded || workflowStatus === "completed"}
+                disabled={isProcessing || !isGoogleLoaded}
                 className="w-full group relative overflow-hidden bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 hover:from-blue-700 hover:via-purple-700 hover:to-pink-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 transform hover:scale-[1.02] hover:shadow-2xl active:scale-[0.98] flex items-center justify-center gap-3 shadow-lg"
               >
                 {/* Shimmer Effect */}
                 <div className="absolute inset-0 animate-shimmer opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
-                {workflowStatus === "completed" ? (
-                  <>Completed ✅</>
-                ) : (isProcessing || (executionId && workflowStatus !== "completed")) ? (
+                {isProcessing && workflowStatus !== "completed" ? (
                   <>
                     <svg
                       className="animate-spin h-6 w-6 text-white"
@@ -360,6 +287,8 @@ export default function HomePage() {
                     </svg>
                     <span className="relative z-10">Processing...</span>
                   </>
+                ) : workflowStatus === "completed" ? (
+                  <>Completed ✅</>
                 ) : (
                   <>
                     <svg
