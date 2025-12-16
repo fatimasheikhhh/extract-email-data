@@ -5,16 +5,16 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  const { executionId } = req.query;
+  const { id } = req.query;
 
-  if (!executionId) {
-    return res.status(400).json({ error: "executionId is required" });
+  if (!id) {
+    return res.status(400).json({ error: "id is required" });
   }
 
   const { data, error } = await supabase
     .from("workflow_executions")
     .select("*")
-    .eq("id", executionId)
+    .eq("id", id)
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
