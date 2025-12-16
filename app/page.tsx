@@ -32,13 +32,11 @@ export default function HomePage() {
     document.body.appendChild(script);
 
     return () => {
-      if (document.body.contains(script))
-      {
+      if (document.body.contains(script)) {
         document.body.removeChild(script);
       }
     };
   }, []);
-
 
   /* ---------------------------------- */
   /* Fetch Latest Execution from DB */
@@ -52,8 +50,7 @@ export default function HomePage() {
       .limit(1)
       .single();
 
-    if (error || !data)
-    {
+    if (error || !data) {
       console.error("Fetch execution error:", error);
       return null;
     }
@@ -80,8 +77,7 @@ export default function HomePage() {
       access_type: "offline",
       prompt: "consent",
       callback: async (response: any) => {
-        try
-        {
+        try {
           if (!response.code) throw new Error("No auth code");
 
           // ⬇️ n8n webhook call karo (bas trigger karega)
@@ -91,8 +87,7 @@ export default function HomePage() {
             body: JSON.stringify({ code: response.code }),
           });
 
-          if (!n8nResponse.ok)
-          {
+          if (!n8nResponse.ok) {
             throw new Error("Failed to start workflow");
           }
 
@@ -102,15 +97,13 @@ export default function HomePage() {
 
           // Retry logic - max 5 attempts
           let executionId: number | null = null;
-          for (let attempt = 0; attempt < 5; attempt++)
-          {
+          for (let attempt = 0; attempt < 5; attempt++) {
             executionId = await fetchLatestExecution();
             if (executionId) break;
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
 
-          if (!executionId)
-          {
+          if (!executionId) {
             throw new Error("Execution not found in database");
           }
 
@@ -118,8 +111,7 @@ export default function HomePage() {
           setWorkflowStatus("processing");
 
           Swal.fire("Connected 🎉", "Workflow started", "success");
-        } catch (err: any)
-        {
+        } catch (err: any) {
           Swal.fire("Error", err.message, "error");
         }
       },
@@ -134,26 +126,39 @@ export default function HomePage() {
   useEffect(() => {
     if (!executionId) return;
 
-    const interval = setInterval(async () => {
-      const { data } = await supabase
-        .from("workflow_executions")
-        .select("status")
-        .eq("id", executionId)
-        .single();
+    const subscription = supabase
+      .channel(`workflow-execution-${executionId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*", // listen to INSERT, UPDATE, DELETE
+          schema: "public",
+          table: "workflow_executions",
+          filter: `id=eq.${executionId}`,
+        },
+        (payload) => {
+          console.log("Realtime payload:", payload);
+          if (
+            payload.new &&
+            typeof payload.new === "object" &&
+            "status" in payload.new
+          ) {
+            const status = (payload.new as { status: string }).status;
+            setWorkflowStatus(status);
 
-      if (!data) return;
+            if (status === "completed") {
+              Swal.fire("Completed 🎉", "Workflow finished", "success");
+            }
+          }
+        }
+      )
+      .subscribe();
 
-      setWorkflowStatus(data.status);
-
-      if (data.status === "completed")
-      {
-        clearInterval(interval);
-        Swal.fire("Completed 🎉", "Workflow finished", "success");
-      }
-    }, 3000);
-
-    return () => clearInterval(interval);
+    return () => {
+      supabase.removeChannel(subscription);
+    };
   }, [executionId]);
+
   return (
     <div className="min-h-screen relative overflow-hidden">
       {/* Animated Background with Gradient */}
@@ -206,7 +211,7 @@ export default function HomePage() {
                   workflowStatus === "processing" ||
                   workflowStatus === "completed"
                 }
-                className="w-full group relative overflow-hidden bg-gradient-to-r from-[#AED175] to-[#4CB2DD] hover:from-[#AED175] hover:to-[#4CB2DD]  disabled:from-gray-400 disabled:to-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 transform hover:scale-[1.02] hover:shadow-2xl active:scale-[0.98] flex items-center justify-center gap-3 shadow-lg"
+                className="w-full group relative overflow-hidden bg-gradient-to-r from-[#AED175] to-[#4CB2DD] hover:from-[#AED175] hover:to-[#4CB2DD]  disabled:from-[#AED175] disabled:to-[#4CB2DD] disabled:hover:from-[#AED175] disabled:to-[#4CB2DD] disabled:cursor-not-allowed text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 transform hover:scale-[1.02] hover:shadow-2xl active:scale-[0.98] flex items-center justify-center gap-3 shadow-lg"
               >
                 {/* Shimmer Effect */}
                 <div className="absolute inset-0 animate-shimmer opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
