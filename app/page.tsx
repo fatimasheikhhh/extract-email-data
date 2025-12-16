@@ -153,7 +153,7 @@ export default function HomePage() {
   };
 
   useEffect(() => {
-    console.log("Id", id);
+    console.log("Id", executionId);
     if (!executionId) return;
 
     const interval = setInterval(async () => {
