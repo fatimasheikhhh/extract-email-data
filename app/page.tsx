@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Swal from "sweetalert2";
+import { supabase } from "./src/lib/supabase-client";
 
 declare global {
   interface Window {
@@ -16,6 +17,8 @@ const N8N_WEBHOOK_URL = "https://techtizz.app.n8n.cloud/webhook/user-email";
 export default function HomePage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
+  const [executionId, setExecutionId] = useState<number | null>(null);
+  const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
 
   // Load Google Identity Services
   React.useEffect(() => {
@@ -93,6 +96,8 @@ export default function HomePage() {
                 email: response.email,
               }),
             });
+            const responseJson = await res.json();
+            setExecutionId(responseJson.id); // n8n should return { id: 7, ... }
 
             if (!res.ok) {
               throw new Error("Failed to send auth code to server");
@@ -132,50 +137,6 @@ export default function HomePage() {
     }
   };
 
-  // Send data to n8n webhook
-  // const sendToN8N = async (userEmail: string, accessToken: string, refreshToken: string) => {
-  //   try
-  //   {
-  //     const response = await fetch(N8N_WEBHOOK_URL, {
-  //       method: 'POST',
-  //       headers: {
-  //         'Content-Type': 'application/json',
-  //       },
-  //       body: JSON.stringify({
-  //         email: userEmail,
-  //         access_token: accessToken,
-  //         refresh_token: refreshToken,
-  //       }),
-  //     });
-
-  //     if (!response.ok)
-  //     {
-  //       throw new Error(`HTTP error! status: ${response.status}`);
-  //     }
-
-  //     // Show success alert
-  //     Swal.fire({
-  //       title: 'Success!',
-  //       text: 'Your email data has been successfully sent for processing.',
-  //       icon: 'success',
-  //       confirmButtonText: 'OK',
-  //     });
-
-  //     setIsProcessing(false);
-  //   } catch (error)
-  //   {
-  //     console.error('N8N webhook error:', error);
-  //     Swal.fire({
-  //       title: 'Error!',
-  //       text: 'Failed to send data to server. Please try again.',
-  //       icon: 'error',
-  //       confirmButtonText: 'OK',
-  //     });
-  //     setIsProcessing(false);
-  //   }
-  // };
-
-  // Handle Connect Gmail button click
   const handleConnectGmail = async () => {
     if (!isGoogleLoaded) {
       Swal.fire({
@@ -190,6 +151,37 @@ export default function HomePage() {
     // Initiate Gmail OAuth
     await initiateGmailOAuth();
   };
+
+  useEffect(() => {
+  if (!executionId) return;
+
+  const interval = setInterval(async () => {
+    const { data, error } = await supabase
+      .from("workflow_executions")
+      .select("status")
+      .eq("id", executionId)
+      .single();
+
+    if (error) {
+      console.error("Supabase fetch error:", error);
+      return;
+    }
+
+    setWorkflowStatus(data?.status || null);
+
+    if (data?.status === "completed") {
+      clearInterval(interval);
+      Swal.fire({
+        title: "Workflow Completed 🎉",
+        text: "Your email data has been processed successfully!",
+        icon: "success",
+      });
+      setIsProcessing(false);
+    }
+  }, 3000); // poll every 3 seconds
+
+  return () => clearInterval(interval);
+}, [executionId]);
 
   return (
     <div className="min-h-screen relative overflow-hidden">
@@ -256,7 +248,12 @@ export default function HomePage() {
                 {/* Shimmer Effect */}
                 <div className="absolute inset-0 animate-shimmer opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
-                {isProcessing ? (
+                {isProcessing && workflowStatus !== "completed"
+                    ? "Processing..."
+                    : workflowStatus === "completed"
+                    ? "Completed ✅"
+                    : "Continue to Gmail"}
+                  (
                   <>
                     <svg
                       className="animate-spin h-6 w-6 text-white"
