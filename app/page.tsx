@@ -12,6 +12,7 @@ declare global {
 
 const GMAIL_SCOPES =
   "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
+
 const N8N_WEBHOOK_URL = "https://techtizz.app.n8n.cloud/webhook/user-email";
 
 export default function HomePage() {
@@ -19,232 +20,140 @@ export default function HomePage() {
   const [executionId, setExecutionId] = useState<number | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
 
-  // Load Google Identity Services
-  React.useEffect(() => {
+  /* ---------------------------------- */
+  /* Load Google Script */
+  /* ---------------------------------- */
+  useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://accounts.google.com/gsi/client";
     script.async = true;
     script.defer = true;
-    script.onload = () => {
-      // Initialize Google Identity Services
-      if (window.google) {
-        // This ensures account selection is available
-        window.google.accounts.id.initialize({
-          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "",
-          auto_select: false, // Don't auto-select, show account picker
-        });
-      }
-      setIsGoogleLoaded(true);
-    };
+    script.onload = () => setIsGoogleLoaded(true);
     document.body.appendChild(script);
 
     return () => {
-      if (document.body.contains(script)) {
+      if (document.body.contains(script))
+      {
         document.body.removeChild(script);
       }
     };
   }, []);
 
-  // Initiate Gmail OAuth flow
+
+  /* ---------------------------------- */
+  /* Fetch Latest Execution from DB */
+  /* ---------------------------------- */
+  const fetchLatestExecution = async (): Promise<number | null> => {
+    const { data, error } = await supabase
+      .from("workflow_executions")
+      .select("id, status")
+      .eq("status", "processing")
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error || !data)
+    {
+      console.error("Fetch execution error:", error);
+      return null;
+    }
+
+    return data.id;
+  };
+
+  /* ---------------------------------- */
+  /* Gmail OAuth */
+  /* ---------------------------------- */
   const initiateGmailOAuth = async () => {
-    try {
-      if (!window.google) {
-        throw new Error("Google Identity Services not loaded");
-      }
+    if (!window.google) return;
 
-      Swal.fire({
-        title: "Connecting Gmail...",
-        text: "Please select your Google account",
-        icon: "info",
-        allowOutsideClick: false,
-        allowEscapeKey: false,
-        showConfirmButton: false,
-        didOpen: () => {
-          Swal.showLoading();
-        },
-      });
+    Swal.fire({
+      title: "Connecting Gmail...",
+      allowOutsideClick: false,
+      showConfirmButton: false,
+      didOpen: () => Swal.showLoading(),
+    });
 
-      const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+    const client = window.google.accounts.oauth2.initCodeClient({
+      client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID!,
+      scope: GMAIL_SCOPES,
+      access_type: "offline",
+      prompt: "consent",
+      callback: async (response: any) => {
+        try
+        {
+          if (!response.code) throw new Error("No auth code");
 
-      if (!clientId) {
-        throw new Error("Google Client ID missing");
-      }
+          // ⬇️ n8n webhook call karo (bas trigger karega)
+          const n8nResponse = await fetch(N8N_WEBHOOK_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: response.code }),
+          });
 
-      // ✅ AUTHORIZATION CODE FLOW (CORRECT)
-      const codeClient = window.google.accounts.oauth2.initCodeClient({
-        client_id: clientId,
-        scope: GMAIL_SCOPES,
-        access_type: "offline", // IMPORTANT
-        prompt: "consent", // IMPORTANT
-        callback: async (response: any) => {
-          try {
-            if (!response.code) {
-              throw new Error("Authorization code not received");
-            }
-
-            // ✅ Send AUTH CODE to n8n (NOT tokens)
-            const res = await fetch(N8N_WEBHOOK_URL, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                code: response.code,
-                email: response.email,
-              }),
-            });
-
-            if (!res.ok) {
-              const errorText = await res.text();
-              console.error("API Error:", errorText);
-              throw new Error("Failed to send auth code to server");
-            }
-
-            const responseJson = await res.json();
-            console.log("Response JSON:", responseJson);
-            console.log("Id from response:", responseJson.id);
-
-            // Check if ID exists in response
-            if (responseJson.id !== undefined && responseJson.id !== null) {
-              setExecutionId(responseJson.id);
-              localStorage.setItem("executionId", String(responseJson.id));
-
-              // ✅ ADD THESE TWO LINES
-              setWorkflowStatus("processing");
-            } else {
-              console.error("ID not found in response:", responseJson);
-              throw new Error("Execution ID not received from server");
-            }
-
-            Swal.fire({
-              title: "Connected Successfully 🎉",
-              text: "Your Gmail is now connected. You will not need to login again.",
-              icon: "success",
-              confirmButtonText: "OK",
-            });
-
-            // setIsProcessing(false);
-          } catch (err: any) {
-            console.error(err);
-            Swal.fire({
-              title: "Error",
-              text: err.message || "Failed to connect Gmail",
-              icon: "error",
-            });
+          if (!n8nResponse.ok)
+          {
+            throw new Error("Failed to start workflow");
           }
-        },
-        redirect_uri: "https://extract-email-data.vercel.app",
-      });
 
-      // 🚀 Start OAuth
-      codeClient.requestCode();
-    } catch (error: any) {
-      console.error(error);
-      Swal.fire({
-        title: "Error",
-        text: error.message || "OAuth failed",
-        icon: "error",
-      });
-    }
+          // ⬇️ IMPORTANT: DB se latest execution fetch karo
+          // Thoda wait karo taake n8n ne DB me insert kar diya ho
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+
+          // Retry logic - max 5 attempts
+          let executionId: number | null = null;
+          for (let attempt = 0; attempt < 5; attempt++)
+          {
+            executionId = await fetchLatestExecution();
+            if (executionId) break;
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+
+          if (!executionId)
+          {
+            throw new Error("Execution not found in database");
+          }
+
+          setExecutionId(executionId);
+          setWorkflowStatus("processing");
+
+          Swal.fire("Connected 🎉", "Workflow started", "success");
+        } catch (err: any)
+        {
+          Swal.fire("Error", err.message, "error");
+        }
+      },
+    });
+
+    client.requestCode();
   };
 
-  const handleConnectGmail = async () => {
-    if (!isGoogleLoaded) {
-      Swal.fire({
-        title: "Loading...",
-        text: "Google services are still loading. Please wait a moment.",
-        icon: "info",
-        confirmButtonText: "OK",
-      });
-      return;
-    }
-
-    // Initiate Gmail OAuth
-    await initiateGmailOAuth();
-  };
-
-  // Check for existing executionId on page load
+  /* ---------------------------------- */
+  /* Polling for Status */
+  /* ---------------------------------- */
   useEffect(() => {
-    const storedExecutionId = localStorage.getItem("executionId");
-    if (storedExecutionId && !executionId) {
-      const id = parseInt(storedExecutionId, 10);
-      if (!isNaN(id)) {
-        setExecutionId(id);
-        console.log("Restored executionId from localStorage:", id);
-      }
-    }
-  }, []);
-
-  // Poll for workflow status
-  useEffect(() => {
-    console.log("Id", executionId);
     if (!executionId) return;
 
-    // Check status immediately on first load
-    const checkStatus = async () => {
-      const { data, error } = await supabase
-        .from("workflow_executions")
-        .select("status")
-        .eq("id", executionId)
-        .single();
-
-      if (error) {
-        console.error("Supabase fetch error:", error);
-        // If execution not found, clear stored ID
-        if (error.code === "PGRST116") {
-          localStorage.removeItem("executionId");
-          setExecutionId(null);
-        }
-        return;
-      }
-
-      console.log("Workflow status:", data?.status);
-      setWorkflowStatus(data?.status || null);
-
-      if (data?.status === "completed") {
-        setWorkflowStatus(data.status);
-        // Don't show alert if it's just a page refresh
-        return;
-      }
-    };
-
-    // Check immediately
-    checkStatus();
-
-    // Then poll every 3 seconds
     const interval = setInterval(async () => {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("workflow_executions")
         .select("status")
         .eq("id", executionId)
         .single();
 
-      if (error) {
-        console.error("Supabase fetch error:", error);
-        if (error.code === "PGRST116") {
-          clearInterval(interval);
-          localStorage.removeItem("executionId");
-          setExecutionId(null);
-        }
-        return;
-      }
+      if (!data) return;
 
-      setWorkflowStatus(data?.status || null);
+      setWorkflowStatus(data.status);
 
-      if (data?.status === "completed") {
+      if (data.status === "completed")
+      {
         clearInterval(interval);
-        Swal.fire({
-          title: "Workflow Completed 🎉",
-          text: "Your email data has been processed successfully!",
-          icon: "success",
-        });
-        // setIsProcessing(false);
+        Swal.fire("Completed 🎉", "Workflow finished", "success");
       }
-    }, 3000); // poll every 3 seconds
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [executionId]);
-
   return (
     <div className="min-h-screen relative overflow-hidden">
       {/* Animated Background with Gradient */}
@@ -291,7 +200,7 @@ export default function HomePage() {
             <div className="space-y-6">
               {/* Connect Gmail Button */}
               <button
-                onClick={handleConnectGmail}
+                onClick={initiateGmailOAuth}
                 disabled={
                   !isGoogleLoaded ||
                   workflowStatus === "processing" ||
