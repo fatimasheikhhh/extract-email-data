@@ -15,7 +15,6 @@ const GMAIL_SCOPES =
 const N8N_WEBHOOK_URL = "https://techtizz.app.n8n.cloud/webhook/user-email";
 
 export default function HomePage() {
-  const [isProcessing, setIsProcessing] = useState(false);
   const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
   const [executionId, setExecutionId] = useState<number | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
@@ -28,8 +27,7 @@ export default function HomePage() {
     script.defer = true;
     script.onload = () => {
       // Initialize Google Identity Services
-      if (window.google)
-      {
+      if (window.google) {
         // This ensures account selection is available
         window.google.accounts.id.initialize({
           client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "",
@@ -41,8 +39,7 @@ export default function HomePage() {
     document.body.appendChild(script);
 
     return () => {
-      if (document.body.contains(script))
-      {
+      if (document.body.contains(script)) {
         document.body.removeChild(script);
       }
     };
@@ -50,14 +47,10 @@ export default function HomePage() {
 
   // Initiate Gmail OAuth flow
   const initiateGmailOAuth = async () => {
-    try
-    {
-      if (!window.google)
-      {
+    try {
+      if (!window.google) {
         throw new Error("Google Identity Services not loaded");
       }
-
-      setIsProcessing(true);
 
       Swal.fire({
         title: "Connecting Gmail...",
@@ -73,8 +66,7 @@ export default function HomePage() {
 
       const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 
-      if (!clientId)
-      {
+      if (!clientId) {
         throw new Error("Google Client ID missing");
       }
 
@@ -85,10 +77,8 @@ export default function HomePage() {
         access_type: "offline", // IMPORTANT
         prompt: "consent", // IMPORTANT
         callback: async (response: any) => {
-          try
-          {
-            if (!response.code)
-            {
+          try {
+            if (!response.code) {
               throw new Error("Authorization code not received");
             }
 
@@ -103,13 +93,27 @@ export default function HomePage() {
                 email: response.email,
               }),
             });
-            const responseJson = await res.json();
-            console.log(res);
-            setExecutionId(responseJson.id); // n8n should return { id: 7, ... }
 
-            if (!res.ok)
-            {
+            if (!res.ok) {
+              const errorText = await res.text();
+              console.error("API Error:", errorText);
               throw new Error("Failed to send auth code to server");
+            }
+
+            const responseJson = await res.json();
+            console.log("Response JSON:", responseJson);
+            console.log("Id from response:", responseJson.id);
+
+            // Check if ID exists in response
+            if (responseJson.id !== undefined && responseJson.id !== null) {
+              setExecutionId(responseJson.id);
+              localStorage.setItem("executionId", String(responseJson.id));
+
+              // ✅ ADD THESE TWO LINES
+              setWorkflowStatus("processing");
+            } else {
+              console.error("ID not found in response:", responseJson);
+              throw new Error("Execution ID not received from server");
             }
 
             Swal.fire({
@@ -120,15 +124,13 @@ export default function HomePage() {
             });
 
             // setIsProcessing(false);
-          } catch (err: any)
-          {
+          } catch (err: any) {
             console.error(err);
             Swal.fire({
               title: "Error",
               text: err.message || "Failed to connect Gmail",
               icon: "error",
             });
-            setIsProcessing(false);
           }
         },
         redirect_uri: "https://extract-email-data.vercel.app",
@@ -136,21 +138,18 @@ export default function HomePage() {
 
       // 🚀 Start OAuth
       codeClient.requestCode();
-    } catch (error: any)
-    {
+    } catch (error: any) {
       console.error(error);
       Swal.fire({
         title: "Error",
         text: error.message || "OAuth failed",
         icon: "error",
       });
-      setIsProcessing(false);
     }
   };
 
   const handleConnectGmail = async () => {
-    if (!isGoogleLoaded)
-    {
+    if (!isGoogleLoaded) {
       Swal.fire({
         title: "Loading...",
         text: "Google services are still loading. Please wait a moment.",
@@ -164,10 +163,55 @@ export default function HomePage() {
     await initiateGmailOAuth();
   };
 
+  // Check for existing executionId on page load
+  useEffect(() => {
+    const storedExecutionId = localStorage.getItem("executionId");
+    if (storedExecutionId && !executionId) {
+      const id = parseInt(storedExecutionId, 10);
+      if (!isNaN(id)) {
+        setExecutionId(id);
+        console.log("Restored executionId from localStorage:", id);
+      }
+    }
+  }, []);
+
+  // Poll for workflow status
   useEffect(() => {
     console.log("Id", executionId);
     if (!executionId) return;
 
+    // Check status immediately on first load
+    const checkStatus = async () => {
+      const { data, error } = await supabase
+        .from("workflow_executions")
+        .select("status")
+        .eq("id", executionId)
+        .single();
+
+      if (error) {
+        console.error("Supabase fetch error:", error);
+        // If execution not found, clear stored ID
+        if (error.code === "PGRST116") {
+          localStorage.removeItem("executionId");
+          setExecutionId(null);
+        }
+        return;
+      }
+
+      console.log("Workflow status:", data?.status);
+      setWorkflowStatus(data?.status || null);
+
+      if (data?.status === "completed") {
+        setWorkflowStatus(data.status);
+        // Don't show alert if it's just a page refresh
+        return;
+      }
+    };
+
+    // Check immediately
+    checkStatus();
+
+    // Then poll every 3 seconds
     const interval = setInterval(async () => {
       const { data, error } = await supabase
         .from("workflow_executions")
@@ -175,23 +219,26 @@ export default function HomePage() {
         .eq("id", executionId)
         .single();
 
-      if (error)
-      {
+      if (error) {
         console.error("Supabase fetch error:", error);
+        if (error.code === "PGRST116") {
+          clearInterval(interval);
+          localStorage.removeItem("executionId");
+          setExecutionId(null);
+        }
         return;
       }
 
       setWorkflowStatus(data?.status || null);
 
-      if (data?.status === "completed")
-      {
+      if (data?.status === "completed") {
         clearInterval(interval);
         Swal.fire({
           title: "Workflow Completed 🎉",
           text: "Your email data has been processed successfully!",
           icon: "success",
         });
-        setIsProcessing(false);
+        // setIsProcessing(false);
       }
     }, 3000); // poll every 3 seconds
 
@@ -201,7 +248,7 @@ export default function HomePage() {
   return (
     <div className="min-h-screen relative overflow-hidden">
       {/* Animated Background with Gradient */}
-      <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-500 animate-gradient">
+      <div className="absolute inset-0 bg-gradient-to-br from-[#AED175] to-[#4CB2DD]  animate-gradient">
         {/* Animated Background Pattern */}
         <div className="absolute inset-0 opacity-20">
           <div className="absolute top-0 left-0 w-96 h-96 bg-blue-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float"></div>
@@ -210,7 +257,7 @@ export default function HomePage() {
             style={{ animationDelay: "2s" }}
           ></div>
           <div
-            className="absolute bottom-0 left-1/2 w-96 h-96 bg-pink-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float"
+            className="absolute bottom-0 left-1/2 w-96 h-96 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float"
             style={{ animationDelay: "4s" }}
           ></div>
         </div>
@@ -223,31 +270,19 @@ export default function HomePage() {
       <div className="relative z-10 min-h-screen flex items-center justify-center p-4 sm:p-6 lg:p-8">
         <div className="w-full max-w-lg">
           {/* Card Container with Glassmorphism */}
-          <div className="bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 p-8 sm:p-10 lg:p-12 transform transition-all duration-300 hover:scale-[1.02]">
+          <div className="bg-white/95 dark:bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 p-8 sm:p-10 lg:p-12 transform transition-all duration-300 hover:scale-[1.02]">
             {/* Logo/Icon Section */}
             <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl shadow-lg mb-6 transform transition-transform duration-300 hover:scale-110">
-                <svg
-                  className="w-10 h-10 text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                  />
-                </svg>
+              <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-[#AED175] to-[#4CB2DD] rounded-2xl mb-6 transform transition-transform duration-300 hover:scale-110">
+                <img src={"/email.png"} alt="email image" />
               </div>
-              <h1 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 bg-clip-text text-transparent mb-3">
+              <h1 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-[#AED175] to-[#4CB2DD] bg-clip-text text-transparent mb-3">
                 Gmail Extractor
               </h1>
-              <p className="text-gray-600 dark:text-gray-300 text-lg">
+              <p className="text-gray-600 dark:text-gray-400 text-lg">
                 Connect your Gmail account securely
               </p>
-              <p className="text-gray-500 dark:text-gray-400 text-sm mt-2">
+              <p className="text-gray-600 dark:text-gray-600 text-sm mt-2">
                 Extract and process your email data effortlessly
               </p>
             </div>
@@ -257,13 +292,19 @@ export default function HomePage() {
               {/* Connect Gmail Button */}
               <button
                 onClick={handleConnectGmail}
-                disabled={isProcessing || !isGoogleLoaded}
-                className="w-full group relative overflow-hidden bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 hover:from-blue-700 hover:via-purple-700 hover:to-pink-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 transform hover:scale-[1.02] hover:shadow-2xl active:scale-[0.98] flex items-center justify-center gap-3 shadow-lg"
+                disabled={
+                  !isGoogleLoaded ||
+                  workflowStatus === "processing" ||
+                  workflowStatus === "completed"
+                }
+                className="w-full group relative overflow-hidden bg-gradient-to-r from-[#AED175] to-[#4CB2DD] hover:from-[#AED175] hover:to-[#4CB2DD]  disabled:from-gray-400 disabled:to-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 transform hover:scale-[1.02] hover:shadow-2xl active:scale-[0.98] flex items-center justify-center gap-3 shadow-lg"
               >
                 {/* Shimmer Effect */}
                 <div className="absolute inset-0 animate-shimmer opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
-                {isProcessing && workflowStatus !== "completed" ? (
+                {workflowStatus === "completed" ? (
+                  <>Completed ✅</>
+                ) : workflowStatus === "processing" ? (
                   <>
                     <svg
                       className="animate-spin h-6 w-6 text-white"
@@ -287,8 +328,6 @@ export default function HomePage() {
                     </svg>
                     <span className="relative z-10">Processing...</span>
                   </>
-                ) : workflowStatus === "completed" ? (
-                  <>Completed ✅</>
                 ) : (
                   <>
                     <svg
@@ -369,27 +408,27 @@ export default function HomePage() {
 
           {/* Additional Info Cards */}
           <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-lg rounded-xl p-4 border border-white/20 text-center">
+            <div className="bg-white/80 dark:bg-white/80 backdrop-blur-lg rounded-xl p-4 border border-white/20 text-center">
               <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
                 🔒
               </div>
-              <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-2">
+              <div className="text-xs font-semibold text-gray-700 dark:text-gray-500 mt-2">
                 Secure
               </div>
             </div>
-            <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-lg rounded-xl p-4 border border-white/20 text-center">
+            <div className="bg-white/80 dark:bg-white/80 backdrop-blur-lg rounded-xl p-4 border border-white/20 text-center">
               <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
                 ⚡
               </div>
-              <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-2">
+              <div className="text-xs font-semibold text-gray-700 dark:text-gray-500 mt-2">
                 Fast
               </div>
             </div>
-            <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-lg rounded-xl p-4 border border-white/20 text-center">
+            <div className="bg-white/80 dark:bg-white/80 backdrop-blur-lg rounded-xl p-4 border border-white/20 text-center">
               <div className="text-2xl font-bold text-pink-600 dark:text-pink-400">
                 ✨
               </div>
-              <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-2">
+              <div className="text-xs font-semibold text-gray-700 dark:text-gray-500 mt-2">
                 Easy
               </div>
             </div>
