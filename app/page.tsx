@@ -97,6 +97,7 @@ export default function HomePage() {
               }),
             });
             const responseJson = await res.json();
+            console.log(res);
             setExecutionId(responseJson.id); // n8n should return { id: 7, ... }
 
             if (!res.ok) {
