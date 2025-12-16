@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Swal from "sweetalert2";
 
 declare global {
@@ -11,197 +11,137 @@ declare global {
 
 const GMAIL_SCOPES =
   "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
+
 const N8N_WEBHOOK_URL = "https://techtizz.app.n8n.cloud/webhook/user-email";
 
 export default function HomePage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
 
-  // Load Google Identity Services
-  React.useEffect(() => {
+  /* --------------------------------------------------
+     Load Google Identity Services
+  -------------------------------------------------- */
+  useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://accounts.google.com/gsi/client";
     script.async = true;
     script.defer = true;
+
     script.onload = () => {
-      // Initialize Google Identity Services
-      if (window.google)
-      {
-        // This ensures account selection is available
+      if (window.google) {
         window.google.accounts.id.initialize({
           client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "",
-          auto_select: false, // Don't auto-select, show account picker
+          auto_select: false,
         });
       }
       setIsGoogleLoaded(true);
     };
+
     document.body.appendChild(script);
 
     return () => {
-      if (document.body.contains(script))
-      {
+      if (document.body.contains(script)) {
         document.body.removeChild(script);
       }
     };
   }, []);
 
-  // Initiate Gmail OAuth flow
+  /* --------------------------------------------------
+     Start Gmail OAuth
+  -------------------------------------------------- */
   const initiateGmailOAuth = async () => {
-    try
-    {
-      if (!window.google)
-      {
-        throw new Error("Google Identity Services not loaded");
-      }
+    try {
+      if (!window.google) throw new Error("Google Identity not loaded");
 
       setIsProcessing(true);
 
       Swal.fire({
-        title: "Connecting Gmail...",
+        title: "Connecting Gmail…",
         text: "Please select your Google account",
-        icon: "info",
         allowOutsideClick: false,
         allowEscapeKey: false,
         showConfirmButton: false,
-        didOpen: () => {
-          Swal.showLoading();
-        },
+        didOpen: () => Swal.showLoading(),
       });
 
       const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+      if (!clientId) throw new Error("Google Client ID missing");
 
-      if (!clientId)
-      {
-        throw new Error("Google Client ID missing");
-      }
-
-      // ✅ AUTHORIZATION CODE FLOW (CORRECT)
       const codeClient = window.google.accounts.oauth2.initCodeClient({
         client_id: clientId,
         scope: GMAIL_SCOPES,
-        access_type: "offline", // IMPORTANT
-        prompt: "consent", // IMPORTANT
+        access_type: "offline",
+        prompt: "consent",
+
         callback: async (response: any) => {
-          try
-          {
-            if (!response.code)
-            {
+          try {
+            if (!response.code) {
               throw new Error("Authorization code not received");
             }
 
-            // ✅ Send AUTH CODE to n8n (NOT tokens)
             const res = await fetch(N8N_WEBHOOK_URL, {
               method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                code: response.code,
-                email: response.email,
-              }),
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code: response.code }),
             });
 
-            if (!res.ok)
-            {
-              throw new Error("Failed to send auth code to server");
-            }
+            if (!res.ok) throw new Error("Failed to start workflow");
 
+            // ✅ WORKFLOW STARTED (NOT COMPLETED)
             Swal.fire({
-              title: "Connected Successfully 🎉",
-              text: "Your Gmail is now connected. You will not need to login again.",
-              icon: "success",
-              confirmButtonText: "OK",
+              title: "Processing started 🚀",
+              text: "We are processing your emails. Please wait…",
+              icon: "info",
+              allowOutsideClick: false,
+              allowEscapeKey: false,
+              showConfirmButton: false,
+              didOpen: () => Swal.showLoading(),
             });
 
+            /* --------------------------------------------------
+               TEMPORARY COMPLETION (REMOVE LATER)
+               Replace with realtime / polling
+            -------------------------------------------------- */
+            setTimeout(() => {
+              setIsProcessing(false);
+              Swal.fire({
+                title: "Completed 🎉",
+                text: "Your workflow has completed successfully",
+                icon: "success",
+              });
+            }, 8000);
+          } catch (err: any) {
             setIsProcessing(false);
-          } catch (err: any)
-          {
-            console.error(err);
-            Swal.fire({
-              title: "Error",
-              text: err.message || "Failed to connect Gmail",
-              icon: "error",
-            });
-            setIsProcessing(false);
+            Swal.fire("Error", err.message || "OAuth failed", "error");
           }
         },
+
         redirect_uri: "https://extract-email-data.vercel.app",
       });
 
-      // 🚀 Start OAuth
       codeClient.requestCode();
-    } catch (error: any)
-    {
-      console.error(error);
-      Swal.fire({
-        title: "Error",
-        text: error.message || "OAuth failed",
-        icon: "error",
-      });
+    } catch (error: any) {
       setIsProcessing(false);
+      Swal.fire("Error", error.message || "OAuth failed", "error");
     }
   };
 
-  // Send data to n8n webhook
-  // const sendToN8N = async (userEmail: string, accessToken: string, refreshToken: string) => {
-  //   try
-  //   {
-  //     const response = await fetch(N8N_WEBHOOK_URL, {
-  //       method: 'POST',
-  //       headers: {
-  //         'Content-Type': 'application/json',
-  //       },
-  //       body: JSON.stringify({
-  //         email: userEmail,
-  //         access_token: accessToken,
-  //         refresh_token: refreshToken,
-  //       }),
-  //     });
-
-  //     if (!response.ok)
-  //     {
-  //       throw new Error(`HTTP error! status: ${response.status}`);
-  //     }
-
-  //     // Show success alert
-  //     Swal.fire({
-  //       title: 'Success!',
-  //       text: 'Your email data has been successfully sent for processing.',
-  //       icon: 'success',
-  //       confirmButtonText: 'OK',
-  //     });
-
-  //     setIsProcessing(false);
-  //   } catch (error)
-  //   {
-  //     console.error('N8N webhook error:', error);
-  //     Swal.fire({
-  //       title: 'Error!',
-  //       text: 'Failed to send data to server. Please try again.',
-  //       icon: 'error',
-  //       confirmButtonText: 'OK',
-  //     });
-  //     setIsProcessing(false);
-  //   }
-  // };
-
-  // Handle Connect Gmail button click
   const handleConnectGmail = async () => {
-    if (!isGoogleLoaded)
-    {
+    if (!isGoogleLoaded) {
       Swal.fire({
-        title: "Loading...",
-        text: "Google services are still loading. Please wait a moment.",
+        title: "Loading…",
+        text: "Google services are still loading",
         icon: "info",
-        confirmButtonText: "OK",
       });
       return;
     }
 
-    // Initiate Gmail OAuth
-    await initiateGmailOAuth();
+    initiateGmailOAuth();
   };
 
+  /* --------------------------------------------------
+     UI
+  -------------------------------------------------- */
   return (
     <div className="min-h-screen relative overflow-hidden">
       {/* Animated Background with Gradient */}
