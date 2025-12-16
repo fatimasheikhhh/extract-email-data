@@ -32,8 +32,7 @@ export default function HomePage() {
     document.body.appendChild(script);
 
     return () => {
-      if (document.body.contains(script))
-      {
+      if (document.body.contains(script)) {
         document.body.removeChild(script);
       }
     };
@@ -45,8 +44,7 @@ export default function HomePage() {
   useEffect(() => {
     // Agar page refresh ho jaye to latest execution check karo
     const checkOngoingExecution = async () => {
-      try
-      {
+      try {
         // Latest execution fetch karo (processing ya completed)
         const { data, error } = await supabase
           .from("workflow_executions")
@@ -55,21 +53,18 @@ export default function HomePage() {
           .limit(1)
           .single();
 
-        if (error || !data)
-        {
+        if (error || !data) {
           // Koi execution nahi mila, ye normal hai
           return;
         }
 
         // Agar processing ya completed hai to set karo
-        if (data.status === "processing" || data.status === "completed")
-        {
+        if (data.status === "processing" || data.status === "completed") {
           console.log("Found ongoing/completed execution:", data);
           setExecutionId(data.id);
           setWorkflowStatus(data.status);
         }
-      } catch (err)
-      {
+      } catch (err) {
         console.error("Error checking ongoing execution:", err);
       }
     };
@@ -89,8 +84,7 @@ export default function HomePage() {
       .limit(1)
       .single();
 
-    if (error || !data)
-    {
+    if (error || !data) {
       console.error("Fetch execution error:", error);
       return null;
     }
@@ -117,8 +111,7 @@ export default function HomePage() {
       access_type: "offline",
       prompt: "consent",
       callback: async (response: any) => {
-        try
-        {
+        try {
           if (!response.code) throw new Error("No auth code");
 
           // ⬇️ n8n webhook call karo (bas trigger karega)
@@ -128,8 +121,7 @@ export default function HomePage() {
             body: JSON.stringify({ code: response.code }),
           });
 
-          if (!n8nResponse.ok)
-          {
+          if (!n8nResponse.ok) {
             throw new Error("Failed to start workflow");
           }
 
@@ -139,15 +131,13 @@ export default function HomePage() {
 
           // Retry logic - max 5 attempts
           let executionId: number | null = null;
-          for (let attempt = 0; attempt < 5; attempt++)
-          {
+          for (let attempt = 0; attempt < 5; attempt++) {
             executionId = await fetchLatestExecution();
             if (executionId) break;
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
 
-          if (!executionId)
-          {
+          if (!executionId) {
             throw new Error("Execution not found in database");
           }
 
@@ -155,8 +145,7 @@ export default function HomePage() {
           setWorkflowStatus("processing");
 
           Swal.fire("Connected 🎉", "Workflow started", "success");
-        } catch (err: any)
-        {
+        } catch (err: any) {
           Swal.fire("Error", err.message, "error");
         }
       },
@@ -175,33 +164,28 @@ export default function HomePage() {
 
     // ⬇️ Pehle current status fetch karo (agar already completed hai to)
     const fetchCurrentStatus = async () => {
-      try
-      {
+      try {
         const { data, error } = await supabase
           .from("workflow_executions")
           .select("status")
           .eq("id", executionId)
           .single();
 
-        if (error)
-        {
+        if (error) {
           console.error("Error fetching status:", error);
           return;
         }
 
-        if (data && data.status)
-        {
+        if (data && data.status) {
           console.log("Current status from DB:", data.status);
           setWorkflowStatus(data.status);
 
           // Agar already completed hai to alert show karo
-          if (data.status === "completed")
-          {
+          if (data.status === "completed") {
             Swal.fire("Completed 🎉", "Workflow finished", "success");
           }
         }
-      } catch (err)
-      {
+      } catch (err) {
         console.error("Error in fetchCurrentStatus:", err);
       }
     };
@@ -233,23 +217,19 @@ export default function HomePage() {
             payload.new &&
             typeof payload.new === "object" &&
             "status" in payload.new
-          )
-          {
+          ) {
             const newStatus = (payload.new as { status: string }).status;
             const oldStatus = payload.old
               ? (payload.old as { status: string }).status
               : null;
 
-            console.log(
-              `Status changed: ${oldStatus} -> ${newStatus}`
-            );
+            console.log(`Status changed: ${oldStatus} -> ${newStatus}`);
 
             // Status update karo
             setWorkflowStatus(newStatus);
 
             // Agar completed ho gaya to alert show karo
-            if (newStatus === "completed")
-            {
+            if (newStatus === "completed") {
               Swal.fire("Completed 🎉", "Workflow finished", "success");
             }
           }
@@ -257,25 +237,20 @@ export default function HomePage() {
       )
       .subscribe((status) => {
         console.log("Subscription status:", status);
-        if (status === "SUBSCRIBED")
-        {
+        if (status === "SUBSCRIBED") {
           console.log("✅ Successfully subscribed to realtime updates");
-        } else if (status === "CHANNEL_ERROR")
-        {
+        } else if (status === "CHANNEL_ERROR") {
           console.error("❌ Channel subscription error");
-        } else if (status === "TIMED_OUT")
-        {
+        } else if (status === "TIMED_OUT") {
           console.error("⏱️ Subscription timed out");
-        } else if (status === "CLOSED")
-        {
+        } else if (status === "CLOSED") {
           console.log("🔒 Channel closed");
         }
       });
 
     // Cleanup function
     return () => {
-      if (subscription)
-      {
+      if (subscription) {
         console.log("Cleaning up subscription for executionId:", executionId);
         supabase.removeChannel(subscription);
       }
@@ -340,7 +315,7 @@ export default function HomePage() {
                 <div className="absolute inset-0 animate-shimmer opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
                 {workflowStatus === "completed" ? (
-                  <>Completed ✅</>
+                  <>Completed </>
                 ) : workflowStatus === "processing" ? (
                   <>
                     <svg
