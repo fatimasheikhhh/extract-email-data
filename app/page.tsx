@@ -19,6 +19,7 @@ export default function HomePage() {
   const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
   const [executionId, setExecutionId] = useState<number | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   /* ---------------------------------- */
   /* Load Google Script */
@@ -32,10 +33,23 @@ export default function HomePage() {
     document.body.appendChild(script);
 
     return () => {
-      if (document.body.contains(script)) {
+      if (document.body.contains(script))
+      {
         document.body.removeChild(script);
       }
     };
+  }, []);
+
+  /* ---------------------------------- */
+  /* Load User Email from localStorage on Page Load */
+  /* ---------------------------------- */
+  useEffect(() => {
+    // Load saved user email from localStorage
+    const savedEmail = localStorage.getItem("gmail_user_email");
+    if (savedEmail)
+    {
+      setUserEmail(savedEmail);
+    }
   }, []);
 
   /* ---------------------------------- */
@@ -43,54 +57,65 @@ export default function HomePage() {
   /* ---------------------------------- */
   useEffect(() => {
     // Agar page refresh ho jaye to latest execution check karo
+    // BUT only if we have a user email
+    if (!userEmail) return;
+
     const checkOngoingExecution = async () => {
-      try {
-        // Latest execution fetch karo (processing ya completed)
+      try
+      {
+        // Latest execution fetch karo (processing ya completed) - BUT ONLY FOR THIS USER
         const { data, error } = await supabase
           .from("workflow_executions")
-          .select("id, status")
+          .select("id, status, user_email")
+          .eq("user_email", userEmail) // ⬇️ IMPORTANT: Filter by user email
           .order("started_at", { ascending: false })
           .limit(1)
           .single();
 
-        if (error || !data) {
+        if (error || !data)
+        {
           // Koi execution nahi mila, ye normal hai
           return;
         }
 
         // Agar processing ya completed hai to set karo
-        if (data.status === "processing" || data.status === "completed") {
-          console.log("Found ongoing/completed execution:", data);
+        if (data.status === "processing" || data.status === "completed")
+        {
+          console.log("Found ongoing/completed execution for user:", data);
           setExecutionId(data.id);
           setWorkflowStatus(data.status);
         }
-      } catch (err) {
+      } catch (err)
+      {
         console.error("Error checking ongoing execution:", err);
       }
     };
 
     checkOngoingExecution();
-  }, []);
+  }, [userEmail]);
 
   /* ---------------------------------- */
   /* Fetch Latest Execution from DB */
   /* ---------------------------------- */
-  const fetchLatestExecution = async (): Promise<number | null> => {
+  const fetchLatestExecution = async (email: string): Promise<number | null> => {
     const { data, error } = await supabase
       .from("workflow_executions")
-      .select("id, status")
+      .select("id, status, user_email")
       .eq("status", "processing")
+      .eq("user_email", email) // ⬇️ IMPORTANT: Filter by user email
       .order("started_at", { ascending: false })
       .limit(1)
       .single();
 
-    if (error || !data) {
+    if (error || !data)
+    {
       console.error("Fetch execution error:", error);
       return null;
     }
 
     return data.id;
   };
+
 
   /* ---------------------------------- */
   /* Gmail OAuth */
@@ -111,33 +136,234 @@ export default function HomePage() {
       access_type: "offline",
       prompt: "consent",
       callback: async (response: any) => {
-        try {
+        try
+        {
+          console.log("🔵 OAuth Response received:", response);
           if (!response.code) throw new Error("No auth code");
 
-          // ⬇️ n8n webhook call karo (bas trigger karega)
+          // ⬇️ IMPORTANT: Clear previous user's execution state
+          // When new OAuth starts, clear old state
+          setExecutionId(null);
+          setWorkflowStatus(null);
+
+          // ⬇️ DEBUG: Log the auth code
+          console.log("🔵 Auth code received:", response.code.substring(0, 20) + "...");
+
+          // ⬇️ IMPORTANT: Get user email from Google FIRST using our API route
+          let userEmailFromGoogle: string | null = null;
+
+          try
+          {
+            console.log("🔵 Getting user email from Google...");
+            console.log("🔵 Current origin:", window.location.origin);
+            const emailResponse = await fetch("/api/get-user-email", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                code: response.code,
+                redirect_uri: window.location.origin // Pass current origin as redirect URI
+              }),
+            });
+
+            if (emailResponse.ok)
+            {
+              const emailData = await emailResponse.json();
+              userEmailFromGoogle = emailData.email;
+              console.log("✅ Email from Google API:", userEmailFromGoogle);
+
+              // ⬇️ Store email immediately
+              if (userEmailFromGoogle)
+              {
+                setUserEmail(userEmailFromGoogle);
+                localStorage.setItem("gmail_user_email", userEmailFromGoogle);
+                console.log("✅ Email stored in state and localStorage");
+              }
+            } else
+            {
+              const errorData = await emailResponse.json();
+              console.error("❌ Error getting email from API:", errorData);
+            }
+          } catch (emailError: any)
+          {
+            console.error("❌ Error calling get-user-email API:", emailError);
+            // Continue anyway, we'll try to get email from n8n or DB
+          }
+
+          // ⬇️ n8n webhook call karo
+          // n8n will exchange the code, get user email, and store it in DB
+          console.log("🔵 Calling n8n webhook...");
           const n8nResponse = await fetch(N8N_WEBHOOK_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code: response.code }),
+            body: JSON.stringify({
+              code: response.code,
+              user_email: userEmailFromGoogle || undefined // Send email if we have it
+            }),
           });
 
-          if (!n8nResponse.ok) {
+          console.log("🔵 n8n Response status:", n8nResponse.status);
+
+          if (!n8nResponse.ok)
+          {
+            const errorText = await n8nResponse.text();
+            console.error("❌ n8n Error:", errorText);
             throw new Error("Failed to start workflow");
           }
 
+          // ⬇️ Try to get email from n8n response if we don't have it yet
+          if (!userEmailFromGoogle)
+          {
+            try
+            {
+              const n8nData = await n8nResponse.json();
+              console.log("🔵 n8n Response data:", n8nData);
+              if (n8nData.user_email)
+              {
+                userEmailFromGoogle = n8nData.user_email;
+                console.log("✅ Email from n8n response:", userEmailFromGoogle);
+                if (userEmailFromGoogle)
+                {
+                  setUserEmail(userEmailFromGoogle);
+                  localStorage.setItem("gmail_user_email", userEmailFromGoogle);
+                }
+              }
+            } catch (e)
+            {
+              console.log("⚠️ n8n response is not JSON, will get email from DB");
+            }
+          }
+
+          // ⬇️ Final check - if we still don't have email, show error
+          if (!userEmailFromGoogle)
+          {
+            console.error("❌ CRITICAL: Could not get user email from any source!");
+            console.error("❌ This means email will be null and workflow won't be user-specific!");
+            Swal.fire({
+              icon: "warning",
+              title: "Email Not Found",
+              text: "Could not retrieve your email. The workflow may not be user-specific. Please check server logs.",
+            });
+            // Don't throw error, continue with workflow but log the issue
+          } else
+          {
+            console.log("✅✅✅ SUCCESS: User email captured:", userEmailFromGoogle);
+            console.log("✅ Email is stored in state:", userEmail);
+            console.log("✅ Email is in localStorage:", localStorage.getItem("gmail_user_email"));
+          }
+
           // ⬇️ IMPORTANT: DB se latest execution fetch karo
-          // Thoda wait karo taake n8n ne DB me insert kar diya ho
+          // Thoda wait karo taake n8n ne DB me insert kar diya ho with user_email
+          console.log("⏳ Waiting for n8n to create execution in DB...");
           await new Promise((resolve) => setTimeout(resolve, 2000));
 
-          // Retry logic - max 5 attempts
+          // Retry logic - max 15 attempts to get the execution with user_email
           let executionId: number | null = null;
-          for (let attempt = 0; attempt < 5; attempt++) {
-            executionId = await fetchLatestExecution();
-            if (executionId) break;
+          let foundUserEmail: string | null = userEmailFromGoogle; // Use email from n8n if available
+
+          for (let attempt = 0; attempt < 15; attempt++)
+          {
+            console.log(`🔍 Attempt ${attempt + 1}/15: Looking for execution with user_email...`);
+
+            // Get the most recent processing execution
+            const { data, error } = await supabase
+              .from("workflow_executions")
+              .select("id, status, user_email, started_at")
+              .eq("status", "processing")
+              .order("started_at", { ascending: false })
+              .limit(5); // Get last 5 to find the right one
+
+            console.log("🔍 Found executions:", data);
+            console.log("🔍 Error:", error);
+
+            if (data && data.length > 0)
+            {
+              // If we have email from n8n, find execution matching that email
+              if (foundUserEmail)
+              {
+                const matchingExecution = data.find(exec => exec.user_email === foundUserEmail);
+                if (matchingExecution && matchingExecution.user_email)
+                {
+                  executionId = matchingExecution.id;
+                  foundUserEmail = matchingExecution.user_email;
+                  console.log("✅ Found execution matching email:", foundUserEmail, "Execution ID:", executionId);
+                  break;
+                }
+              }
+
+              // Otherwise, find the first one with user_email
+              const executionWithEmail = data.find(exec => exec.user_email);
+              if (executionWithEmail && executionWithEmail.user_email)
+              {
+                executionId = executionWithEmail.id;
+                foundUserEmail = executionWithEmail.user_email;
+                console.log("✅ Found execution with email:", foundUserEmail, "Execution ID:", executionId);
+
+                // ⬇️ IMPORTANT: Check if this is a different user
+                if (userEmail && userEmail !== foundUserEmail)
+                {
+                  console.log("⚠️ Different user detected:", userEmail, "vs", foundUserEmail);
+                  // This execution belongs to a different user, don't use it
+                  executionId = null;
+                  foundUserEmail = null;
+                  // Wait a bit more and try again
+                  await new Promise((resolve) => setTimeout(resolve, 1000));
+                  continue;
+                }
+
+                break;
+              } else
+              {
+                console.log("⚠️ Execution found but no user_email yet, waiting...");
+              }
+            }
+
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
 
-          if (!executionId) {
+          // ⬇️ Store current user email if we found it
+          if (foundUserEmail)
+          {
+            console.log("✅ Storing user email:", foundUserEmail);
+            setUserEmail(foundUserEmail);
+            localStorage.setItem("gmail_user_email", foundUserEmail);
+          } else
+          {
+            console.error("❌ Could not find user_email after 15 attempts");
+          }
+
+          // If we still don't have executionId, try one more time without filters
+          if (!executionId)
+          {
+            console.log("⚠️ Trying fallback: Get latest execution without filters...");
+            const { data } = await supabase
+              .from("workflow_executions")
+              .select("id, status, user_email, started_at")
+              .order("started_at", { ascending: false })
+              .limit(1)
+              .single();
+
+            if (data)
+            {
+              console.log("🔍 Fallback execution found:", data);
+              executionId = data.id;
+              if (data.user_email)
+              {
+                foundUserEmail = data.user_email;
+                if (foundUserEmail)
+                {
+                  setUserEmail(foundUserEmail);
+                  localStorage.setItem("gmail_user_email", foundUserEmail);
+                  console.log("✅ Using fallback email:", foundUserEmail);
+                }
+              } else
+              {
+                console.error("❌ Fallback execution also has no user_email");
+              }
+            }
+          }
+
+          if (!executionId)
+          {
             throw new Error("Execution not found in database");
           }
 
@@ -145,7 +371,8 @@ export default function HomePage() {
           setWorkflowStatus("processing");
 
           Swal.fire("Connected 🎉", "Workflow started", "success");
-        } catch (err: any) {
+        } catch (err: any)
+        {
           Swal.fire("Error", err.message, "error");
         }
       },
@@ -155,37 +382,62 @@ export default function HomePage() {
   };
 
   /* ---------------------------------- */
+  /* Clear User Data / Switch Account */
+  /* ---------------------------------- */
+  const clearUserData = () => {
+    setUserEmail(null);
+    setExecutionId(null);
+    setWorkflowStatus(null);
+    localStorage.removeItem("gmail_user_email");
+    Swal.fire("Cleared", "You can now connect with a different account", "info");
+  };
+
+  /* ---------------------------------- */
   /* Realtime Status Updates with Socket */
   /* ---------------------------------- */
   useEffect(() => {
-    if (!executionId) return;
+    if (!executionId || !userEmail) return;
 
     let subscription: ReturnType<typeof supabase.channel> | null = null;
 
     // ⬇️ Pehle current status fetch karo (agar already completed hai to)
     const fetchCurrentStatus = async () => {
-      try {
+      try
+      {
         const { data, error } = await supabase
           .from("workflow_executions")
-          .select("status")
+          .select("status, user_email")
           .eq("id", executionId)
           .single();
 
-        if (error) {
+        if (error)
+        {
           console.error("Error fetching status:", error);
           return;
         }
 
-        if (data && data.status) {
+        // ⬇️ IMPORTANT: Verify this execution belongs to current user
+        if (data && data.user_email && data.user_email !== userEmail)
+        {
+          console.warn("Execution belongs to different user, ignoring");
+          setExecutionId(null);
+          setWorkflowStatus(null);
+          return;
+        }
+
+        if (data && data.status)
+        {
           console.log("Current status from DB:", data.status);
           setWorkflowStatus(data.status);
 
           // Agar already completed hai to alert show karo
-          if (data.status === "completed") {
+          if (data.status === "completed")
+          {
             Swal.fire("Completed 🎉", "Workflow finished", "success");
           }
         }
-      } catch (err) {
+      } catch (err)
+      {
         console.error("Error in fetchCurrentStatus:", err);
       }
     };
@@ -217,7 +469,16 @@ export default function HomePage() {
             payload.new &&
             typeof payload.new === "object" &&
             "status" in payload.new
-          ) {
+          )
+          {
+            // ⬇️ IMPORTANT: Verify this execution belongs to current user
+            const payloadEmail = (payload.new as { user_email?: string }).user_email;
+            if (payloadEmail && payloadEmail !== userEmail)
+            {
+              console.warn("Realtime update for different user, ignoring");
+              return;
+            }
+
             const newStatus = (payload.new as { status: string }).status;
             const oldStatus = payload.old
               ? (payload.old as { status: string }).status
@@ -229,7 +490,8 @@ export default function HomePage() {
             setWorkflowStatus(newStatus);
 
             // Agar completed ho gaya to alert show karo
-            if (newStatus === "completed") {
+            if (newStatus === "completed")
+            {
               Swal.fire("Completed 🎉", "Workflow finished", "success");
             }
           }
@@ -237,25 +499,30 @@ export default function HomePage() {
       )
       .subscribe((status) => {
         console.log("Subscription status:", status);
-        if (status === "SUBSCRIBED") {
+        if (status === "SUBSCRIBED")
+        {
           console.log("✅ Successfully subscribed to realtime updates");
-        } else if (status === "CHANNEL_ERROR") {
+        } else if (status === "CHANNEL_ERROR")
+        {
           console.error("❌ Channel subscription error");
-        } else if (status === "TIMED_OUT") {
+        } else if (status === "TIMED_OUT")
+        {
           console.error("⏱️ Subscription timed out");
-        } else if (status === "CLOSED") {
+        } else if (status === "CLOSED")
+        {
           console.log("🔒 Channel closed");
         }
       });
 
     // Cleanup function
     return () => {
-      if (subscription) {
+      if (subscription)
+      {
         console.log("Cleaning up subscription for executionId:", executionId);
         supabase.removeChannel(subscription);
       }
     };
-  }, [executionId]);
+  }, [executionId, userEmail]);
 
   return (
     <div className="min-h-screen relative overflow-hidden">
@@ -368,6 +635,36 @@ export default function HomePage() {
                   </>
                 )}
               </button>
+
+              {/* Current User Email Display */}
+              {userEmail && (
+                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                  <div className="flex items-center gap-2">
+                    <svg
+                      className="w-5 h-5 text-gray-500"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                      />
+                    </svg>
+                    <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">
+                      {userEmail}
+                    </span>
+                  </div>
+                  <button
+                    onClick={clearUserData}
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium underline"
+                  >
+                    Switch Account
+                  </button>
+                </div>
+              )}
 
               {/* Loading Status */}
               {!isGoogleLoaded && (
