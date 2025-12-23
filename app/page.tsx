@@ -13,7 +13,8 @@ declare global {
 const GMAIL_SCOPES =
   "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
 
-const N8N_WEBHOOK_URL = "https://techtizz.app.n8n.cloud/webhook/user-email";
+const N8N_WEBHOOK_URL =
+  "https://fqaswarpractice1.app.n8n.cloud/webhook/user-email";
 
 export default function HomePage() {
   const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
