@@ -16,15 +16,10 @@ const GMAIL_SCOPES =
 const N8N_WEBHOOK_URL =
   "https://fqaswarpractice1.app.n8n.cloud/webhook/user-email";
 
-// Database column name for user email in workflow_executions table
-// If your database uses a different column name (e.g., "email" or "userEmail"), change this
-const USER_EMAIL_COLUMN = "user_email";
-
 export default function HomePage() {
   const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
   const [executionId, setExecutionId] = useState<number | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   /* ---------------------------------- */
   /* Load Google Script */
@@ -46,89 +41,51 @@ export default function HomePage() {
   }, []);
 
   /* ---------------------------------- */
-  /* Load User Email from localStorage on Page Load */
-  /* ---------------------------------- */
-  useEffect(() => {
-    const storedEmail = localStorage.getItem("userEmail");
-    if (storedEmail)
-    {
-      setUserEmail(storedEmail);
-      console.log("📧 Loaded user email from localStorage:", storedEmail);
-    }
-  }, []);
-
-  /* ---------------------------------- */
   /* Check for Ongoing Execution on Page Load */
   /* ---------------------------------- */
   useEffect(() => {
-    // Only check if we have a user email
-    if (!userEmail)
-    {
-      // Reset status if no user email
-      setExecutionId(null);
-      setWorkflowStatus(null);
-      return;
-    }
-
+    // Agar page refresh ho jaye to latest execution check karo
     const checkOngoingExecution = async () => {
       try
       {
-        // Latest execution fetch karo (processing ya completed) - FILTERED BY EMAIL
+        // Latest execution fetch karo (processing ya completed)
         const { data, error } = await supabase
           .from("workflow_executions")
           .select("id, status")
-          .eq(USER_EMAIL_COLUMN, userEmail) // ⬇️ IMPORTANT: Filter by current user's email
           .order("started_at", { ascending: false })
           .limit(1)
           .single();
 
         if (error || !data)
         {
-          // Koi execution nahi mila for this user, reset status
-          console.log("No execution found for user:", userEmail);
-          setExecutionId(null);
-          setWorkflowStatus(null);
+          // Koi execution nahi mila, ye normal hai
           return;
         }
 
         // Agar processing ya completed hai to set karo
         if (data.status === "processing" || data.status === "completed")
         {
-          console.log("Found ongoing/completed execution for user:", userEmail, data);
+          console.log("Found ongoing/completed execution:", data);
           setExecutionId(data.id);
           setWorkflowStatus(data.status);
-        } else
-        {
-          // Reset if status is something else
-          setExecutionId(null);
-          setWorkflowStatus(null);
         }
       } catch (err)
       {
         console.error("Error checking ongoing execution:", err);
-        setExecutionId(null);
-        setWorkflowStatus(null);
       }
     };
 
     checkOngoingExecution();
-  }, [userEmail]);
+  }, []);
 
   /* ---------------------------------- */
   /* Fetch Latest Execution from DB */
   /* ---------------------------------- */
-  const fetchLatestExecution = async (email: string): Promise<number | null> => {
-    if (!email)
-    {
-      console.error("❌ No email provided to fetchLatestExecution");
-      return null;
-    }
-
+  const fetchLatestExecution = async (): Promise<number | null> => {
     const { data, error } = await supabase
       .from("workflow_executions")
       .select("id, status")
       .eq("status", "processing")
-      .eq(USER_EMAIL_COLUMN, email) // ⬇️ IMPORTANT: Filter by user email
       .order("started_at", { ascending: false })
       .limit(1)
       .single();
@@ -139,20 +96,7 @@ export default function HomePage() {
       return null;
     }
 
-    console.log("✅ Found execution for user:", email, "Execution ID:", data.id);
     return data.id;
-  };
-
-  /* ---------------------------------- */
-  /* Disconnect/Reset User */
-  /* ---------------------------------- */
-  const disconnectUser = () => {
-    setUserEmail(null);
-    setExecutionId(null);
-    setWorkflowStatus(null);
-    localStorage.removeItem("userEmail");
-    console.log("🔌 User disconnected");
-    Swal.fire("Disconnected", "You can now connect a different Gmail account", "info");
   };
 
   /* ---------------------------------- */
@@ -172,51 +116,11 @@ export default function HomePage() {
       client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID!,
       scope: GMAIL_SCOPES,
       access_type: "offline",
-      prompt: "consent", // Force consent to allow switching accounts
+      prompt: "consent",
       callback: async (response: any) => {
         try
         {
           if (!response.code) throw new Error("No auth code");
-
-          // ⬇️ IMPORTANT: Get user email first from OAuth code
-          console.log("🔵 Getting user email from OAuth code...");
-          const emailResponse = await fetch("/api/get-user-email", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              code: response.code,
-              redirect_uri: window.location.origin
-            }),
-          });
-
-          if (!emailResponse.ok)
-          {
-            const errorData = await emailResponse.json();
-            throw new Error(errorData.error || "Failed to get user email");
-          }
-
-          const userData = await emailResponse.json();
-          const currentUserEmail = userData.email;
-
-          if (!currentUserEmail)
-          {
-            throw new Error("No email received from Google");
-          }
-
-          console.log("✅ User email captured:", currentUserEmail);
-
-          // ⬇️ IMPORTANT: Check if this is a different user
-          // If switching users, reset previous execution status
-          if (userEmail && userEmail !== currentUserEmail)
-          {
-            console.log("🔄 Switching users:", userEmail, "->", currentUserEmail);
-            setExecutionId(null);
-            setWorkflowStatus(null);
-          }
-
-          // Store email in state and localStorage
-          setUserEmail(currentUserEmail);
-          localStorage.setItem("userEmail", currentUserEmail);
 
           // ⬇️ n8n webhook call karo (bas trigger karega)
           const n8nResponse = await fetch(N8N_WEBHOOK_URL, {
@@ -230,15 +134,15 @@ export default function HomePage() {
             throw new Error("Failed to start workflow");
           }
 
-          // ⬇️ IMPORTANT: DB se latest execution fetch karo (filtered by email)
+          // ⬇️ IMPORTANT: DB se latest execution fetch karo
           // Thoda wait karo taake n8n ne DB me insert kar diya ho
           await new Promise((resolve) => setTimeout(resolve, 2000));
 
-          // Retry logic - max 5 attempts (with email filter)
+          // Retry logic - max 5 attempts
           let executionId: number | null = null;
           for (let attempt = 0; attempt < 5; attempt++)
           {
-            executionId = await fetchLatestExecution(currentUserEmail);
+            executionId = await fetchLatestExecution();
             if (executionId) break;
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
@@ -254,11 +158,7 @@ export default function HomePage() {
           Swal.fire("Connected 🎉", "Workflow started", "success");
         } catch (err: any)
         {
-          console.error("❌ OAuth error:", err);
           Swal.fire("Error", err.message, "error");
-          // Reset on error
-          setExecutionId(null);
-          setWorkflowStatus(null);
         }
       },
     });
@@ -623,44 +523,13 @@ export default function HomePage() {
 
                 {/* Form Section */}
                 <div className="space-y-6">
-                  {/* User Email Display */}
-                  {userEmail && (
-                    <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <svg
-                            className="w-5 h-5 text-gray-600"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                            />
-                          </svg>
-                          <span className="text-sm text-gray-700 font-medium">
-                            {userEmail}
-                          </span>
-                        </div>
-                        <button
-                          onClick={disconnectUser}
-                          className="text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
-                        >
-                          Switch
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
                   {/* Connect Gmail Button */}
                   <button
                     onClick={initiateGmailOAuth}
                     disabled={
                       !isGoogleLoaded ||
-                      workflowStatus === "processing"
+                      workflowStatus === "processing" ||
+                      workflowStatus === "completed"
                     }
                     className="w-full group relative overflow-hidden bg-gradient-to-r from-[#AED175] to-[#4CB2DD] hover:from-[#AED175] hover:to-[#4CB2DD]  disabled:from-[#AED175] disabled:to-[#4CB2DD] disabled:hover:from-[#AED175] disabled:to-[#4CB2DD] disabled:cursor-not-allowed text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 transform hover:scale-[1.02] hover:shadow-2xl active:scale-[0.98] flex items-center justify-center gap-3 shadow-lg"
                   >
@@ -668,7 +537,7 @@ export default function HomePage() {
                     <div className="absolute inset-0 animate-shimmer opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
                     {workflowStatus === "completed" ? (
-                      <>Completed - Click to Connect Another Account</>
+                      <>Completed </>
                     ) : workflowStatus === "processing" ? (
                       <>
                         <svg
