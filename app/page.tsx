@@ -14,7 +14,7 @@ const GMAIL_SCOPES =
   "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
 
 const N8N_WEBHOOK_URL =
-  "https://techtizz.app.n8n.cloud/webhook-test/user-email";
+  "https://techtizz.app.n8n.cloud/webhook/user-email";
 
 // Database column name for user email in workflow_executions table
 // If your database uses a different column name (e.g., "email" or "userEmail"), change this
